@@ -51,6 +51,8 @@
               rust-analyzer
             ])
             pkg-config
+            # for plotting benchmark data with criterion.rs
+            gnuplot
           ];
 
           # Specify the rust-src path (many editors rely on this)
