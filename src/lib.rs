@@ -1,9 +1,29 @@
 //! all of the functions update the inputs based on the slice of updates
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Update {
     Remove { index: usize },
     Insert { index: usize, value: u8 },
+}
+impl Update {
+    #[inline]
+    fn index(self) -> usize {
+        match self {
+            Update::Remove { index } => index,
+            Update::Insert { index, .. } => index,
+        }
+    }
+}
+
+impl Ord for Update {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.index().cmp(&other.index())
+    }
+}
+impl PartialOrd for Update {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// basic for loop implementation: go through all updates and apply them
