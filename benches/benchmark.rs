@@ -12,33 +12,20 @@ fn build_input(length: usize) -> Vec<u8> {
 fn build_updates(num_updates: usize, len: usize) -> Vec<Update> {
     let mut r = StdRng::from_os_rng();
 
-    (0..num_updates)
-        .scan((len, 0, len / num_updates), |(length, start, end), _| {
-            *end += 3;
-            while *start >= *end {
-                *end += 1;
-            }
-            if *end > *length {
-                *end = *length;
-            }
-            let index = r.random_range(*start..*end);
-            *start = index;
-            Some(match r.random_range(0..=1) {
-                0 => {
-                    *length -= 1;
-                    Update::Remove { index }
-                }
-                1 => {
-                    *length += 1;
-                    Update::Insert {
-                        index,
-                        value: r.random(),
-                    }
-                }
-                _ => unreachable!(),
+    let mut v = (0..num_updates)
+        .scan(len as i64, |length, _| {
+            let index = r.random_range(0..len as i64);
+            Some(if r.random() {
+                *length -= 1;
+                Update::Remove(index)
+            } else {
+                *length += 1;
+                Update::Insert(index, r.random())
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    v.sort();
+    v
 }
 fn build_both(num_updates: usize, len: usize) -> (Vec<u8>, Vec<Update>) {
     (build_input(len), build_updates(num_updates, len))
@@ -56,10 +43,10 @@ pub fn bench_small(c: &mut Criterion) {
 }
 pub fn bench_large(c: &mut Criterion) {
     let mut group = c.benchmark_group("large");
-    group.sample_size(40);
+    group.sample_size(10);
     group.bench_function("update_sample", |b| {
         b.iter_batched(
-            || build_both(5000, 1_000_000),
+            || build_both(50_000, 1_000_000),
             |(input, updates)| update_simple(&mut black_box(input), black_box(&updates)),
             criterion::BatchSize::SmallInput,
         )
