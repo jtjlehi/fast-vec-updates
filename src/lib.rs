@@ -98,6 +98,7 @@ pub fn update_simple(input: &mut Vec<u8>, updates: &[Update]) {
 /// calculates exact size of iterator before hand
 /// (uses iterators)
 pub fn update_realloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    // TODO: fix this one
     // calculate the change in the vector size
     let total_offset: i64 = updates
         .iter()
@@ -106,7 +107,7 @@ pub fn update_realloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
             Update::Insert(_, _) => 1,
         })
         .sum();
-    let v = Vec::with_capacity(input.len() + total_offset as usize);
+    let v = Vec::with_capacity((input.len() as i64 + total_offset) as usize);
     let mut updates = updates.iter();
     let (update, mut v) =
         input
@@ -154,6 +155,7 @@ struct UpdateIter<'updates, 'inputs> {
 impl Iterator for UpdateIter<'_, '_> {
     type Item = u8;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         assert!(
             self.updates
@@ -193,6 +195,22 @@ impl Iterator for UpdateIter<'_, '_> {
                 nxt
             }
         }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.input.len()
+            + self
+                .updates
+                .iter()
+                .filter(|update| matches!(update, Update::Insert(_, _)))
+                .count()
+            - self
+                .updates
+                .iter()
+                .filter(|update| matches!(update, Update::Remove(_)))
+                .count();
+        (size, Some(size))
     }
 }
 
@@ -278,6 +296,12 @@ mod test {
         ];
         update_simple(&mut input, updates);
         assert_eq!(input, update_realloc(&input1, updates));
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(5, 10);
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_realloc(&input1, &updates));
+        }
     }
 
     #[test]
