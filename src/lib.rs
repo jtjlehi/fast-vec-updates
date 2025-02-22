@@ -93,67 +93,6 @@ pub fn update_simple(input: &mut Vec<u8>, updates: &[Update]) {
     }
 }
 
-/// allocates a new array and inserts elements from vector and array
-///
-/// calculates exact size of iterator before hand
-/// (uses iterators)
-pub fn update_realloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
-    // TODO: fix this one
-    // calculate the change in the vector size
-    let total_offset: i64 = updates
-        .iter()
-        .map(|update| match update {
-            Update::Remove(_) => -1,
-            Update::Insert(_, _) => 1,
-        })
-        .sum();
-    let mut v = Vec::with_capacity((input.len() as i64 + total_offset) as usize);
-
-    let mut updates = updates.iter();
-    let mut inputs = input.iter().enumerate();
-
-    let mut update = updates.next();
-    let mut next_input = inputs.next();
-
-    // loop until no updates apply to current idx
-    loop {
-        match (update, next_input) {
-            (Some(Update::Remove(index)), Some((idx, _))) if *index == idx => {
-                update = updates.next();
-                next_input = inputs.next();
-            }
-            (Some(Update::Remove(index)), Some((idx, _))) if *index < idx => {
-                update = updates.next();
-            }
-            (Some(Update::Insert(index, insert_val)), Some((idx, _))) if *index == idx => {
-                v.push(*insert_val);
-                update = updates.next();
-            }
-            (_, Some((_, val))) => {
-                v.push(*val);
-                next_input = inputs.next();
-            }
-            (None, None) => break,
-            (Some(Update::Remove(_)), None) => {
-                update = updates.next();
-            }
-            (Some(Update::Insert(_, insert_val)), None) => {
-                v.push(*insert_val);
-                update = updates.next();
-            }
-        }
-    }
-
-    // if there are any updates left, apply them
-    // for update in update.into_iter().chain(updates) {
-    //     match update {
-    //         Update::Remove(_) => {}
-    //         Update::Insert(_, val) => v.push(*val),
-    //     }
-    // }
-    v
-}
-
 struct UpdateIter<'updates, 'inputs> {
     updates: &'updates [Update],
     update_idx: usize,
@@ -231,6 +170,60 @@ pub fn update_collect_iter(input: &[u8], updates: &[Update]) -> Vec<u8> {
         input_idx: 0,
     }
     .collect()
+}
+
+/// allocates a new array and inserts elements from vector and array
+///
+/// calculates exact size of iterator before hand
+/// (uses iterators)
+pub fn update_realloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    // TODO: fix this one
+    // calculate the change in the vector size
+    let total_offset: i64 = updates
+        .iter()
+        .map(|update| match update {
+            Update::Remove(_) => -1,
+            Update::Insert(_, _) => 1,
+        })
+        .sum();
+    let mut v = Vec::with_capacity((input.len() as i64 + total_offset) as usize);
+
+    let mut updates = updates.iter();
+    let mut inputs = input.iter().enumerate();
+
+    let mut update = updates.next();
+    let mut next_input = inputs.next();
+
+    // loop until no updates apply to current idx
+    loop {
+        match (update, next_input) {
+            (Some(Update::Remove(index)), Some((idx, _))) if *index == idx => {
+                update = updates.next();
+                next_input = inputs.next();
+            }
+            (Some(Update::Remove(index)), Some((idx, _))) if *index < idx => {
+                update = updates.next();
+            }
+            (Some(Update::Insert(index, insert_val)), Some((idx, _))) if *index == idx => {
+                v.push(*insert_val);
+                update = updates.next();
+            }
+            (_, Some((_, val))) => {
+                v.push(*val);
+                next_input = inputs.next();
+            }
+            (None, None) => break,
+            (Some(Update::Remove(_)), None) => {
+                update = updates.next();
+            }
+            (Some(Update::Insert(_, insert_val)), None) => {
+                v.push(*insert_val);
+                update = updates.next();
+            }
+        }
+    }
+
+    v
 }
 
 #[cfg(test)]
