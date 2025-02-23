@@ -367,6 +367,43 @@ pub fn update_split_new_types(input: &[u8], updates: &[Update]) -> Vec<u8> {
     remove_indexes(&insert_val_indexes(input, &inserts), &removes)
 }
 
+#[inline]
+fn _split_new_types_smarter(updates: &[Update]) -> (Vec<usize>, Vec<(usize, Vec<u8>)>) {
+    let mut removes = Vec::with_capacity(updates.len());
+    let mut inserts = Vec::<(usize, Vec<u8>)>::with_capacity(updates.len());
+
+    for update in updates {
+        match *update {
+            Update::Remove(idx) => match removes.last() {
+                Some(&last_remove) if last_remove == idx => continue,
+                _ => removes.push(idx + inserts.len()),
+            },
+            Update::Insert(idx, val) => match inserts.last_mut() {
+                Some(last_insert) if last_insert.0 == idx => last_insert.1.push(val),
+                _ => inserts.push((idx, vec![val])),
+            },
+        }
+    }
+    (removes, inserts)
+}
+#[inline]
+fn insert_val_indexes_1(input: &[u8], inserts: &[(usize, u8)]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len() + inserts.len());
+    let mut prev_idx = 0;
+    for &(insert_idx, val) in inserts {
+        output.extend_from_slice(&input[prev_idx..insert_idx]);
+        output.push(val);
+        prev_idx = insert_idx;
+    }
+    output.extend_from_slice(&input[prev_idx..]);
+    output
+}
+pub fn update_split_new_types_1(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let (removes, inserts) = split_new_types(updates);
+
+    remove_indexes(&insert_val_indexes_1(input, &inserts), &removes)
+}
+
 #[cfg(test)]
 mod test {
 
@@ -502,6 +539,16 @@ mod test {
             let input1 = input.clone();
             update_simple(&mut input, &updates);
             assert_eq!(input, update_split_new_types(&input1, &updates));
+        }
+    }
+    #[test]
+    fn test_update_split_new_type_1() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(5, 10);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_split_new_types_1(&input1, &updates));
         }
     }
 }
