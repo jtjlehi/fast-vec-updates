@@ -226,8 +226,9 @@ pub fn update_realloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
     v
 }
 
-pub fn update_split(input: &[u8], updates: &[Update]) -> Vec<u8> {
-    let (removes, inserts): (Vec<_>, Vec<_>) = updates
+#[inline]
+fn split_alloc(updates: &[Update]) -> (Vec<Update>, Vec<Update>) {
+    updates
         .iter()
         .copied()
         .scan(0, |num_inserts, update| {
@@ -239,58 +240,131 @@ pub fn update_split(input: &[u8], updates: &[Update]) -> Vec<u8> {
                 }
             })
         })
-        .partition(|updates| matches!(updates, Update::Remove(_)));
+        .partition(|updates| matches!(updates, Update::Remove(_)))
+}
 
-    let inserted_v = {
-        let mut inserted_v = Vec::with_capacity(input.len() + inserts.len());
-        let mut inserts = inserts.into_iter();
-        let mut next_insert = inserts.next();
-        for (idx, &val) in input.iter().enumerate() {
-            while let Some(Update::Insert(insert_idx, insert_val)) = next_insert {
-                if insert_idx == idx {
-                    next_insert = inserts.next();
-                    inserted_v.push(insert_val);
-                } else {
-                    break;
-                }
-            }
-            // we always push the current val
-            inserted_v.push(val);
-        }
-        // continue to get the items out
-        let curr_idx = inserted_v.len();
+#[inline]
+fn split_insert(input: &[u8], inserts: Vec<Update>) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len() + inserts.len());
+    let mut inserts = inserts.into_iter();
+    let mut next_insert = inserts.next();
+    for (idx, &val) in input.iter().enumerate() {
         while let Some(Update::Insert(insert_idx, insert_val)) = next_insert {
-            if insert_idx == curr_idx {
-                inserted_v.push(insert_val);
+            if insert_idx == idx {
                 next_insert = inserts.next();
+                output.push(insert_val);
             } else {
                 break;
             }
         }
+        // we always push the current val
+        output.push(val);
+    }
+    // continue to get the items out
+    let curr_idx = output.len();
+    while let Some(Update::Insert(insert_idx, insert_val)) = next_insert {
+        if insert_idx == curr_idx {
+            output.push(insert_val);
+            next_insert = inserts.next();
+        } else {
+            break;
+        }
+    }
 
-        inserted_v
-    };
+    output
+}
 
-    {
-        let mut removed_v = Vec::with_capacity(inserted_v.len() - removes.len());
-        let mut removes = removes.into_iter();
-        let mut next_remove = removes.next();
-        for (idx, val) in inserted_v.iter().enumerate() {
-            let mut add_val = true;
-            while let Some(Update::Remove(remove_idx)) = next_remove {
-                if remove_idx == idx {
-                    next_remove = removes.next();
-                    add_val = false;
-                } else {
-                    break;
-                }
-            }
-            if add_val {
-                removed_v.push(*val)
+#[inline]
+fn split_remove(input: &[u8], removes: Vec<Update>) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len() - removes.len());
+    let mut removes = removes.into_iter();
+    let mut next_remove = removes.next();
+    for (idx, val) in input.iter().enumerate() {
+        let mut add_val = true;
+        while let Some(Update::Remove(remove_idx)) = next_remove {
+            if remove_idx == idx {
+                next_remove = removes.next();
+                add_val = false;
+            } else {
+                break;
             }
         }
-        removed_v
+        if add_val {
+            output.push(*val)
+        }
     }
+    output
+}
+
+pub fn update_split_alloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let (removes, inserts): (Vec<_>, Vec<_>) = split_alloc(updates);
+
+    split_remove(&split_insert(input, inserts), removes)
+}
+
+#[inline]
+fn split_new_types(updates: &[Update]) -> (Vec<usize>, Vec<(usize, u8)>) {
+    let mut removes = Vec::<usize>::with_capacity(updates.len());
+    let mut inserts = Vec::<(usize, u8)>::with_capacity(updates.len());
+
+    for update in updates {
+        match *update {
+            Update::Remove(idx) => removes.push(idx + inserts.len()),
+            Update::Insert(idx, val) => inserts.push((idx, val)),
+        }
+    }
+    (removes, inserts)
+}
+#[inline]
+fn insert_val_indexes(input: &[u8], inserts: &[(usize, u8)]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len() + inserts.len());
+    let mut inserts = inserts.iter();
+    let mut next_insert = inserts.next();
+    for (idx, &val) in input.iter().enumerate() {
+        while let Some(&(insert_idx, insert_val)) = next_insert {
+            if insert_idx == idx {
+                next_insert = inserts.next();
+                output.push(insert_val);
+            } else {
+                break;
+            }
+        }
+        // we always push the current val
+        output.push(val);
+    }
+    // continue to get the items out
+    let curr_idx = output.len();
+    while let Some(&(insert_idx, insert_val)) = next_insert {
+        if insert_idx == curr_idx {
+            output.push(insert_val);
+            next_insert = inserts.next();
+        } else {
+            break;
+        }
+    }
+
+    output
+}
+
+#[inline]
+fn remove_indexes(input: &[u8], removes: &[usize]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len() - removes.len());
+    let mut prev_idx = 0;
+    for remove_idx in removes {
+        if remove_idx < &prev_idx {
+            continue;
+        }
+        output.extend_from_slice(&input[prev_idx..*remove_idx]);
+        prev_idx = remove_idx + 1;
+    }
+    output.extend_from_slice(&input[prev_idx..]);
+    output
+}
+
+pub fn update_split_new_types(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let (removes, inserts) = split_new_types(updates);
+
+    remove_indexes(&insert_val_indexes(input, &inserts), &removes)
 }
 
 #[cfg(test)]
@@ -398,7 +472,7 @@ mod test {
             Update::Insert(0, 3),
             Update::Insert(0, 4),
         ];
-        assert_eq!(vec![1, 2, 3, 4], update_split(&[], updates));
+        assert_eq!(vec![1, 2, 3, 4], update_split_alloc(&[], updates));
     }
     #[test]
     fn test_removes_update_split() {
@@ -408,16 +482,26 @@ mod test {
             Update::Remove(2),
             Update::Remove(3),
         ];
-        assert_eq!(vec![2], update_split(&[1, 2, 3, 4], updates));
+        assert_eq!(vec![2], update_split_alloc(&[1, 2, 3, 4], updates));
     }
     #[test]
-    fn test_update_split() {
+    fn test_update_split_alloc() {
         for _ in 0..1_000 {
             let (mut input, updates) = build_both(5, 10);
             println!("input: {input:?}\nupdates: {updates:?}");
             let input1 = input.clone();
             update_simple(&mut input, &updates);
-            assert_eq!(input, update_split(&input1, &updates));
+            assert_eq!(input, update_split_alloc(&input1, &updates));
+        }
+    }
+    #[test]
+    fn test_update_split_new_type() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(5, 10);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_split_new_types(&input1, &updates));
         }
     }
 }

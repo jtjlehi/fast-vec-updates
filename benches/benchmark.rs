@@ -1,7 +1,10 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use fast_update::{build_both, update_collect_iter, update_realloc, update_simple, update_split};
+use fast_update::{
+    build_both, update_collect_iter, update_realloc, update_simple, update_split_alloc,
+    update_split_new_types,
+};
 
 pub fn bench_small(c: &mut Criterion) {
     let mut group = c.benchmark_group("small");
@@ -28,10 +31,24 @@ pub fn bench_small(c: &mut Criterion) {
             criterion::BatchSize::SmallInput,
         );
     });
-    group.bench_function("update_split", |b| {
+    group.bench_function("update_split_alloc", |b| {
         b.iter_batched(
             || build_both(5_000, 100_000),
-            |(input, updates)| black_box(update_split(black_box(&input), black_box(&updates))),
+            |(input, updates)| {
+                black_box(update_split_alloc(black_box(&input), black_box(&updates)))
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_split_new_types", |b| {
+        b.iter_batched(
+            || build_both(5_000, 100_000),
+            |(input, updates)| {
+                black_box(update_split_new_types(
+                    black_box(&input),
+                    black_box(&updates),
+                ))
+            },
             criterion::BatchSize::SmallInput,
         );
     });
@@ -63,10 +80,24 @@ pub fn bench_large(c: &mut Criterion) {
             criterion::BatchSize::SmallInput,
         );
     });
-    group.bench_function("update_split", |b| {
+    group.bench_function("update_split_alloc", |b| {
         b.iter_batched(
             || build_both(50_000, 1_000_000),
-            |(input, updates)| black_box(update_split(black_box(&input), black_box(&updates))),
+            |(input, updates)| {
+                black_box(update_split_alloc(black_box(&input), black_box(&updates)))
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_split_new_types", |b| {
+        b.iter_batched(
+            || build_both(50_000, 1_000_000),
+            |(input, updates)| {
+                black_box(update_split_new_types(
+                    black_box(&input),
+                    black_box(&updates),
+                ))
+            },
             criterion::BatchSize::SmallInput,
         );
     });
@@ -90,10 +121,24 @@ pub fn bench_extra_large(c: &mut Criterion) {
             criterion::BatchSize::SmallInput,
         );
     });
-    group.bench_function("update_split", |b| {
+    group.bench_function("update_split_alloc", |b| {
         b.iter_batched(
             || build_both(5_000_000, 50_000_000),
-            |(input, updates)| black_box(update_split(black_box(&input), black_box(&updates))),
+            |(input, updates)| {
+                black_box(update_split_alloc(black_box(&input), black_box(&updates)))
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_split_new_types", |b| {
+        b.iter_batched(
+            || build_both(5_000_000, 50_000_000),
+            |(input, updates)| {
+                black_box(update_split_new_types(
+                    black_box(&input),
+                    black_box(&updates),
+                ))
+            },
             criterion::BatchSize::SmallInput,
         );
     });
