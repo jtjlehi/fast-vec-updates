@@ -226,6 +226,73 @@ pub fn update_realloc(input: &[u8], updates: &[Update]) -> Vec<u8> {
     v
 }
 
+pub fn update_split(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let (removes, inserts): (Vec<_>, Vec<_>) = updates
+        .iter()
+        .copied()
+        .scan(0, |num_inserts, update| {
+            Some(match update {
+                Update::Remove(idx) => Update::Remove(idx + *num_inserts),
+                insert @ Update::Insert(_, _) => {
+                    *num_inserts += 1;
+                    insert
+                }
+            })
+        })
+        .partition(|updates| matches!(updates, Update::Remove(_)));
+
+    let inserted_v = {
+        let mut inserted_v = Vec::with_capacity(input.len() + inserts.len());
+        let mut inserts = inserts.into_iter();
+        let mut next_insert = inserts.next();
+        for (idx, &val) in input.iter().enumerate() {
+            while let Some(Update::Insert(insert_idx, insert_val)) = next_insert {
+                if insert_idx == idx {
+                    next_insert = inserts.next();
+                    inserted_v.push(insert_val);
+                } else {
+                    break;
+                }
+            }
+            // we always push the current val
+            inserted_v.push(val);
+        }
+        // continue to get the items out
+        let curr_idx = inserted_v.len();
+        while let Some(Update::Insert(insert_idx, insert_val)) = next_insert {
+            if insert_idx == curr_idx {
+                inserted_v.push(insert_val);
+                next_insert = inserts.next();
+            } else {
+                break;
+            }
+        }
+
+        inserted_v
+    };
+
+    {
+        let mut removed_v = Vec::with_capacity(inserted_v.len() - removes.len());
+        let mut removes = removes.into_iter();
+        let mut next_remove = removes.next();
+        for (idx, val) in inserted_v.iter().enumerate() {
+            let mut add_val = true;
+            while let Some(Update::Remove(remove_idx)) = next_remove {
+                if remove_idx == idx {
+                    next_remove = removes.next();
+                    add_val = false;
+                } else {
+                    break;
+                }
+            }
+            if add_val {
+                removed_v.push(*val)
+            }
+        }
+        removed_v
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -320,6 +387,37 @@ mod test {
             let input1 = input.clone();
             update_simple(&mut input, &updates);
             assert_eq!(input, update_collect_iter(&input1, &updates));
+        }
+    }
+
+    #[test]
+    fn test_inserts_update_split() {
+        let updates = &[
+            Update::Insert(0, 1),
+            Update::Insert(0, 2),
+            Update::Insert(0, 3),
+            Update::Insert(0, 4),
+        ];
+        assert_eq!(vec![1, 2, 3, 4], update_split(&[], updates));
+    }
+    #[test]
+    fn test_removes_update_split() {
+        let updates = &[
+            Update::Remove(0),
+            Update::Remove(0),
+            Update::Remove(2),
+            Update::Remove(3),
+        ];
+        assert_eq!(vec![2], update_split(&[1, 2, 3, 4], updates));
+    }
+    #[test]
+    fn test_update_split() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(5, 10);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_split(&input1, &updates));
         }
     }
 }
