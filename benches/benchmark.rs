@@ -2,8 +2,8 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fast_update::{
-    build_both, update_collect_iter, update_realloc, update_simple, update_split_alloc,
-    update_split_new_types, update_split_new_types_1,
+    build_both, update_collect_iter, update_in_chunks, update_realloc, update_simple,
+    update_split_alloc, update_split_new_types, update_split_new_types_1,
 };
 
 pub fn bench_small(c: &mut Criterion) {
@@ -64,6 +64,13 @@ pub fn bench_small(c: &mut Criterion) {
             criterion::BatchSize::SmallInput,
         );
     });
+    group.bench_function("update_in_chunks", |b| {
+        b.iter_batched(
+            || build_both(5_000, 100_000),
+            |(input, updates)| black_box(update_in_chunks(black_box(&input), black_box(&updates))),
+            criterion::BatchSize::SmallInput,
+        );
+    });
     group.finish();
 }
 pub fn bench_large(c: &mut Criterion) {
@@ -114,6 +121,13 @@ pub fn bench_large(c: &mut Criterion) {
                     black_box(&updates),
                 ))
             },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_in_chunks", |b| {
+        b.iter_batched(
+            || build_both(50_000, 1_000_000),
+            |(input, updates)| black_box(update_in_chunks(black_box(&input), black_box(&updates))),
             criterion::BatchSize::SmallInput,
         );
     });

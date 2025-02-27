@@ -411,6 +411,71 @@ pub fn update_split_new_types_1(input: &[u8], updates: &[Update]) -> Vec<u8> {
     output
 }
 
+#[inline]
+pub fn update_in_chunks_gen<const CHUNK_SIZE: usize>(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let chunks = input.chunks_exact(CHUNK_SIZE);
+    let extra = chunks.remainder();
+
+    let mut updates = updates.iter();
+    let mut next_update = updates.next();
+
+    let mut output = Vec::with_capacity(input.len() + updates.len());
+
+    let mut offset: i64 = 0;
+    let mut last_index = None;
+    for (idx, chunk) in chunks.enumerate() {
+        // start by copying the slice into the new array
+        output.extend_from_slice(chunk);
+        // then use the same approach from `simple_update` but it's cheaper since
+        while let Some(update) = next_update {
+            let index = update.offset_index(offset);
+            if index > idx || index >= output.len() {
+                break;
+            }
+
+            match *update {
+                // idempotent removal
+                Update::Remove(idx) if Some(idx) == last_index => (),
+                Update::Remove(idx) => {
+                    output.remove(index);
+                    last_index = Some(idx);
+                    offset -= 1;
+                }
+                Update::Insert(_, value) => {
+                    output.insert(index, value);
+                    offset += 1;
+                }
+            }
+            next_update = updates.next();
+        }
+    }
+    output.extend_from_slice(extra);
+    // then use the same approach from `simple_update` but limited to this scope
+    let mut last_index = None;
+    while let Some(update) = next_update {
+        let index = update.offset_index(offset);
+        match *update {
+            // idempotent removal
+            Update::Remove(idx) if Some(idx) == last_index => (),
+            Update::Remove(idx) => {
+                output.remove(index);
+                last_index = Some(idx);
+                offset -= 1;
+            }
+            Update::Insert(_, value) => {
+                output.insert(index, value);
+                offset += 1;
+            }
+        }
+        next_update = updates.next();
+    }
+    output
+}
+
+pub fn update_in_chunks(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    update_in_chunks_gen::<2>(input, updates)
+}
+
 #[cfg(test)]
 mod test {
 
@@ -556,6 +621,16 @@ mod test {
             let input1 = input.clone();
             update_simple(&mut input, &updates);
             assert_eq!(input, update_split_new_types_1(&input1, &updates));
+        }
+    }
+    #[test]
+    fn test_update_in_chunks() {
+        for _ in 0..10_000 {
+            let (mut input, updates) = build_both(5, 10);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_in_chunks_gen::<3>(&input1, &updates));
         }
     }
 }
