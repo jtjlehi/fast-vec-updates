@@ -386,22 +386,29 @@ fn _split_new_types_smarter(updates: &[Update]) -> (Vec<usize>, Vec<(usize, Vec<
     }
     (removes, inserts)
 }
-#[inline]
-fn insert_val_indexes_1(input: &[u8], inserts: &[(usize, u8)]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(input.len() + inserts.len());
-    let mut prev_idx = 0;
-    for &(insert_idx, val) in inserts {
-        output.extend_from_slice(&input[prev_idx..insert_idx]);
-        output.push(val);
-        prev_idx = insert_idx;
-    }
-    output.extend_from_slice(&input[prev_idx..]);
-    output
-}
 pub fn update_split_new_types_1(input: &[u8], updates: &[Update]) -> Vec<u8> {
     let (removes, inserts) = split_new_types(updates);
 
-    remove_indexes(&insert_val_indexes_1(input, &inserts), &removes)
+    let mut inserted = Vec::with_capacity(input.len() + inserts.len());
+    let mut prev_idx = 0;
+    for (insert_idx, val) in inserts {
+        inserted.extend_from_slice(&input[prev_idx..insert_idx]);
+        inserted.push(val);
+        prev_idx = insert_idx;
+    }
+    inserted.extend_from_slice(&input[prev_idx..]);
+
+    let mut output = Vec::with_capacity(inserted.len() - removes.len());
+    let mut prev_idx = 0;
+    for remove_idx in removes {
+        if remove_idx < prev_idx {
+            continue;
+        }
+        output.extend_from_slice(&inserted[prev_idx..remove_idx]);
+        prev_idx = remove_idx + 1;
+    }
+    output.extend_from_slice(&inserted[prev_idx..]);
+    output
 }
 
 #[cfg(test)]
