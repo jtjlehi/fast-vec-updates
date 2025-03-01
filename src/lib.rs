@@ -392,6 +392,43 @@ pub fn update_split_new_types_1(input: &[u8], updates: &[Update]) -> Vec<u8> {
     output.extend_from_slice(&inserted[prev_idx..]);
     output
 }
+pub fn update_split_new_types_1_1(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let (removes, inserts) = {
+        let mut removes = Vec::<usize>::with_capacity(updates.len());
+        let mut inserts = Vec::<(usize, u8)>::with_capacity(updates.len());
+
+        for update in updates {
+            match *update {
+                Update::Remove(idx) => {
+                    let remove_idx = idx + inserts.len();
+                    if Some(&remove_idx) != removes.last() {
+                        removes.push(idx + inserts.len())
+                    }
+                }
+                Update::Insert(idx, val) => inserts.push((idx, val)),
+            }
+        }
+        (removes, inserts)
+    };
+
+    let mut inserted = Vec::with_capacity(input.len() + inserts.len());
+    let mut prev_idx = 0;
+    for (insert_idx, val) in inserts {
+        inserted.extend_from_slice(&input[prev_idx..insert_idx]);
+        inserted.push(val);
+        prev_idx = insert_idx;
+    }
+    inserted.extend_from_slice(&input[prev_idx..]);
+
+    let mut output = Vec::with_capacity(inserted.len() - removes.len());
+    let mut prev_idx = 0;
+    for remove_idx in removes {
+        output.extend_from_slice(&inserted[prev_idx..remove_idx]);
+        prev_idx = remove_idx + 1;
+    }
+    output.extend_from_slice(&inserted[prev_idx..]);
+    output
+}
 
 pub fn update_split_new_types_2(input: &[u8], updates: &[Update]) -> Vec<u8> {
     // indexes of removes
@@ -429,6 +466,94 @@ pub fn update_split_new_types_2(input: &[u8], updates: &[Update]) -> Vec<u8> {
         inserted.extend_from_slice(&input[prev_idx..insert_idx]);
         // copy over all of the inserts
         inserted.extend_from_slice(&inserts[inserts_range]);
+        prev_idx = insert_idx;
+    }
+    inserted.extend_from_slice(&input[prev_idx..]);
+
+    let mut output = Vec::with_capacity(inserted.len() - removes.len());
+    let mut prev_idx = 0;
+    for remove_idx in removes {
+        output.extend_from_slice(&inserted[prev_idx..remove_idx]);
+        prev_idx = remove_idx + 1;
+    }
+    output.extend_from_slice(&inserted[prev_idx..]);
+    output
+}
+
+#[inline]
+fn _alloc_vecs(updates_len: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>, Vec<u8>) {
+    assert!(updates_len > 0);
+    const {
+        assert!(size_of::<usize>() > 0);
+    }
+    let v1_size = size_of::<u8>() * updates_len;
+    let v2_size = size_of::<usize>() * updates_len;
+    let v3_size = size_of::<usize>() * updates_len;
+    let v4_size = size_of::<usize>() * (updates_len + 1);
+    let total_size = v1_size + v2_size + v3_size + v4_size;
+
+    let layout = std::alloc::Layout::from_size_align(total_size, align_of::<usize>()).unwrap();
+    // SAFETY: layout has non zero size as updates_len > 0 and `size_of::<usize> > 0`
+    let raw_ptr = unsafe { std::alloc::alloc(layout) };
+
+    if raw_ptr.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+
+    let v1_ptr = raw_ptr;
+    // SAFETY:
+    let v2_ptr = unsafe { v1_ptr.add(v1_size) } as *mut usize;
+    let v3_ptr = unsafe { v2_ptr.add(v2_size) };
+    let v4_ptr = unsafe { v3_ptr.add(v3_size) };
+
+    let v1 = unsafe { Vec::from_raw_parts(v1_ptr, 0, updates_len) };
+    // let v2 = unsafe { Vec::from_raw_parts(t_ptr, 0, updates_len) };
+    todo!()
+}
+
+pub fn update_split_new_types_3(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    // indexes of removes
+    let mut removes = Vec::<usize>::with_capacity(updates.len());
+    // all of the data that will be inserted into
+    let mut inserts = Vec::<u8>::with_capacity(updates.len());
+    // list of the index to insert
+    let mut insert_idxs = Vec::<usize>::with_capacity(updates.len());
+    // list of offsets of where to get range
+    let mut insert_ranges = Vec::<usize>::with_capacity(updates.len());
+
+    for update in updates {
+        match *update {
+            Update::Remove(idx) => {
+                let remove_idx = idx + inserts.len();
+                if Some(&remove_idx) != removes.last() {
+                    removes.push(idx + inserts.len())
+                }
+            }
+            Update::Insert(idx, val) => {
+                if inserts.is_empty() {
+                    inserts.push(val);
+                    insert_ranges.push(0);
+                    insert_ranges.push(1);
+                    insert_idxs.push(idx);
+                } else if *insert_idxs.last().unwrap() == idx {
+                    inserts.push(val);
+                    *insert_ranges.last_mut().unwrap() = inserts.len();
+                } else {
+                    inserts.push(val);
+                    insert_idxs.push(idx);
+                    insert_ranges.push(inserts.len());
+                }
+            }
+        }
+    }
+
+    let mut inserted = Vec::with_capacity(input.len() + inserts.len());
+    let mut prev_idx = 0;
+    for (range, insert_idx) in insert_ranges.windows(2).zip(insert_idxs) {
+        // copy over all the stuff that hasn't changed
+        inserted.extend_from_slice(&input[prev_idx..insert_idx]);
+        // copy over all of the inserts
+        inserted.extend_from_slice(&inserts[range[0]..range[1]]);
         prev_idx = insert_idx;
     }
     inserted.extend_from_slice(&input[prev_idx..]);
@@ -656,6 +781,16 @@ mod test {
         }
     }
     #[test]
+    fn test_update_split_new_type_1_1() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(50, 100);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_split_new_types_1_1(&input1, &updates));
+        }
+    }
+    #[test]
     fn test_update_split_new_type_2() {
         for _ in 0..1_000 {
             let (mut input, updates) = build_both(5, 10);
@@ -663,6 +798,16 @@ mod test {
             let input1 = input.clone();
             update_simple(&mut input, &updates);
             assert_eq!(input, update_split_new_types_2(&input1, &updates));
+        }
+    }
+    #[test]
+    fn test_update_split_new_type_3() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(50, 100);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            update_simple(&mut input, &updates);
+            assert_eq!(input, update_split_new_types_3(&input1, &updates));
         }
     }
     #[test]
