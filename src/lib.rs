@@ -1,4 +1,6 @@
 #![feature(let_chains)]
+#![feature(maybe_uninit_as_bytes)]
+#![feature(maybe_uninit_slice)]
 //! all of the functions update the inputs based on the slice of updates
 
 pub fn build_input(length: usize) -> Vec<u8> {
@@ -480,87 +482,268 @@ pub fn update_split_new_types_2(input: &[u8], updates: &[Update]) -> Vec<u8> {
     output
 }
 
-#[inline]
-fn _alloc_vecs(updates_len: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>, Vec<u8>) {
-    assert!(updates_len > 0);
-    const {
-        assert!(size_of::<usize>() > 0);
-    }
-    let v1_size = size_of::<u8>() * updates_len;
-    let v2_size = size_of::<usize>() * updates_len;
-    let v3_size = size_of::<usize>() * updates_len;
-    let v4_size = size_of::<usize>() * (updates_len + 1);
-    let total_size = v1_size + v2_size + v3_size + v4_size;
+/// module to encapsulate `ContigUpdates`
+mod contig_updates {
+    use std::mem::MaybeUninit;
 
-    let layout = std::alloc::Layout::from_size_align(total_size, align_of::<usize>()).unwrap();
-    // SAFETY: layout has non zero size as updates_len > 0 and `size_of::<usize> > 0`
-    let raw_ptr = unsafe { std::alloc::alloc(layout) };
-
-    if raw_ptr.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
-
-    let v1_ptr = raw_ptr;
-    // SAFETY:
-    let v2_ptr = unsafe { v1_ptr.add(v1_size) } as *mut usize;
-    let v3_ptr = unsafe { v2_ptr.add(v2_size) };
-    let v4_ptr = unsafe { v3_ptr.add(v3_size) };
-
-    let v1 = unsafe { Vec::from_raw_parts(v1_ptr, 0, updates_len) };
-    // let v2 = unsafe { Vec::from_raw_parts(t_ptr, 0, updates_len) };
-    todo!()
-}
-
-pub fn update_split_new_types_3(input: &[u8], updates: &[Update]) -> Vec<u8> {
-    // indexes of removes
-    let mut removes = Vec::<usize>::with_capacity(updates.len());
-    // all of the data that will be inserted into
-    let mut inserts = Vec::<u8>::with_capacity(updates.len());
-    // list of the index to insert
-    let mut insert_idxs = Vec::<usize>::with_capacity(updates.len());
-    // list of offsets of where to get range
-    let mut insert_ranges = Vec::<usize>::with_capacity(updates.len());
-
-    for update in updates {
-        match *update {
-            Update::Remove(idx) => {
-                let remove_idx = idx + inserts.len();
-                if Some(&remove_idx) != removes.last() {
-                    removes.push(idx + inserts.len())
-                }
-            }
-            Update::Insert(idx, val) => {
-                if inserts.is_empty() {
-                    inserts.push(val);
-                    insert_ranges.push(0);
-                    insert_ranges.push(1);
-                    insert_idxs.push(idx);
-                } else if *insert_idxs.last().unwrap() == idx {
-                    inserts.push(val);
-                    *insert_ranges.last_mut().unwrap() = inserts.len();
-                } else {
-                    inserts.push(val);
-                    insert_idxs.push(idx);
-                    insert_ranges.push(inserts.len());
-                }
-            }
+    /// newtype wrapper that helps memory get layed out like:
+    ///
+    /// [removes    ] [inserts        ] [insert_idxs] [insert_ranges  ]
+    /// [updates_len] [updates_len / 8] [updates_len] [updates_len + 1]
+    #[derive(Debug, Copy, Clone)]
+    struct UpdatesLen(usize);
+    impl UpdatesLen {
+        #[inline]
+        const fn removes_start(self) -> usize {
+            0
+        }
+        #[inline]
+        const fn removes_cap(self) -> usize {
+            self.0
+        }
+        #[inline]
+        const fn inserts_start(self) -> usize {
+            self.removes_cap()
+        }
+        /// values take up less space then indexes
+        /// specifically there are 8 values for each index
+        #[inline]
+        const fn inserts_cap(self) -> usize {
+            self.0.div_ceil(8)
+        }
+        #[inline]
+        const fn idxs_start(self) -> usize {
+            self.removes_cap() + self.inserts_cap()
+        }
+        #[inline]
+        const fn idxs_cap(self) -> usize {
+            self.0
+        }
+        #[inline]
+        const fn ranges_start(self) -> usize {
+            self.removes_cap() + self.inserts_cap() + self.idxs_cap()
+        }
+        #[inline]
+        const fn ranges_cap(self) -> usize {
+            self.0 + 1
         }
     }
 
-    let mut inserted = Vec::with_capacity(input.len() + inserts.len());
-    let mut prev_idx = 0;
-    for (range, insert_idx) in insert_ranges.windows(2).zip(insert_idxs) {
-        // copy over all the stuff that hasn't changed
-        inserted.extend_from_slice(&input[prev_idx..insert_idx]);
-        // copy over all of the inserts
-        inserted.extend_from_slice(&inserts[range[0]..range[1]]);
-        prev_idx = insert_idx;
+    /// contiguously allocated memory for updates
+    pub(super) struct ContigUpdates {
+        updates_len: UpdatesLen,
+        /// actual memory
+        /// setup like this:
+        /// [removes    ] [inserts        ] [insert_idxs] [insert_ranges  ]
+        /// [updates_len] [updates_len / 8] [updates_len] [updates_len + 1]
+        memory: Box<[MaybeUninit<[u8; 8]>]>,
+        /// len of removes list
+        /// # Safety
+        /// Only increment if the all values in `removes` are initialized
+        /// must remain <= `removes_cap`
+        removes_len: usize,
+        /// len of inserts list
+        /// # Safety
+        /// Only increment if the all values in `inserts` are initialized
+        /// This includes the entirity of the array indexed into
+        /// so if `inserts_len == 3` then `memory[inserts_start] = [x, x, x, 0, 0, 0, 0, 0]`
+        /// must remain <= `inserts_cap`
+        inserts_len: usize,
+        /// len of the index to insert
+        /// # Safety
+        /// Only increment if the all values in `idxs` are initialized
+        /// must remain <= `idxs_cap`
+        idxs_len: usize,
+        /// list of offsets of where to get range
+        /// # Safety
+        /// Only increment if the all values in `ranges` are initialized
+        /// must remain <= `ranges_cap`
+        ranges_len: usize,
     }
-    inserted.extend_from_slice(&input[prev_idx..]);
 
-    let mut output = Vec::with_capacity(inserted.len() - removes.len());
+    impl ContigUpdates {
+        #[inline]
+        fn new_uninit(updates_len: usize) -> Self {
+            let updates_len = UpdatesLen(updates_len);
+            let mut memory = Box::new_uninit_slice(
+                updates_len.removes_cap()
+                    + updates_len.inserts_cap()
+                    + updates_len.idxs_cap()
+                    + updates_len.ranges_cap(),
+            );
+
+            // start by pushing 0 `ranges`
+            memory[updates_len.ranges_start()].write(0_usize.to_ne_bytes());
+
+            Self {
+                updates_len,
+                memory,
+                removes_len: 0,
+                inserts_len: 0,
+                idxs_len: 0,
+                ranges_len: 1,
+            }
+        }
+
+        /// # Safety:
+        /// it is the responsability of the caller that all bytes in the range
+        /// are initialized, and that each array was initialized using `usize::to_ne_bytes`
+        #[inline]
+        unsafe fn assume_usize_slice(&self, start: usize, len: usize) -> &[usize] {
+            let slice = &self.memory[start..start + len];
+            // SAFETY:
+            // the caller makes sure that each element in each array is initialized as usize
+            let init_slice = unsafe { slice.assume_init_ref() };
+            bytemuck::cast_slice(init_slice)
+        }
+
+        #[inline]
+        fn inserts(&self) -> &[u8] {
+            let inserts_start = self.updates_len.inserts_start();
+            let inserts_arr_len = self.inserts_len.div_ceil(8);
+            let slice = &self.memory[inserts_start..inserts_start + inserts_arr_len];
+            // SAFETY:
+            // `slice` is entirely initialized
+            // - `inserts` start at removes_cap
+            // - whenever we "push" to inserts we initialize all of the members of the array
+            // - we only increment `self.inserts_len` after initializing the array it points into
+            let init_slice = unsafe { slice.assume_init_ref() };
+            // after casting to from [[u8]] to [u8], take only the bytes we are using
+            &bytemuck::cast_slice(init_slice)[..self.inserts_len]
+        }
+        #[inline]
+        fn push_remove(&mut self, idx: usize) {
+            let remove_idx = (idx + self.inserts_len).to_ne_bytes();
+            // SAFETY: accessing removes
+            if self.removes_len == 0
+                || unsafe {
+                    self.memory[self.updates_len.removes_start() + self.removes_len - 1]
+                        .assume_init()
+                } != remove_idx
+            {
+                assert!(
+                    self.removes_len < self.updates_len.removes_cap(),
+                    "trying `push_remove` past the end of `removes`"
+                );
+                self.memory[self.removes_len].write(remove_idx);
+                self.removes_len += 1;
+            }
+        }
+        /// only push `val` onto `inserts`
+        #[inline]
+        fn inserts_push(&mut self, val: u8) {
+            assert!(self.inserts_len < self.updates_len.inserts_cap() * 8);
+
+            let inserts_rem = self.inserts_len % 8;
+            let inserts_idx = self.updates_len.inserts_start() + self.inserts_len / 8;
+            let chunk_ref = &mut self.memory[inserts_idx];
+            if inserts_rem == 0 {
+                // initialize the entire chunk at once
+                chunk_ref.write([val, 0, 0, 0, 0, 0, 0, 0]);
+            } else {
+                // SAFETY: we initialize the entire chunk at the same time
+                let chunk = unsafe { chunk_ref.assume_init_mut() };
+                chunk[inserts_rem] = val;
+            }
+
+            // SAFETY: either value was initialized in a previous call or just now
+            #[allow(unused_unsafe)]
+            unsafe {
+                self.inserts_len += 1;
+            }
+        }
+
+        /// push `val` onto `inserts` and update book keeping for `idx`
+        #[inline]
+        fn push_insert_index(&mut self, idx: usize, val: u8) {
+            self.inserts_push(val);
+
+            let idx = idx.to_ne_bytes();
+
+            let push_idx = self.idxs_len == 0 || {
+                // SAFETY: we are reading the last value of `insert_idxs`
+                let last_insert_idx = unsafe {
+                    self.memory[self.updates_len.idxs_start() + self.idxs_len - 1].assume_init()
+                };
+                last_insert_idx != idx
+            };
+
+            if push_idx {
+                assert!(self.idxs_len < self.updates_len.idxs_cap());
+                self.memory[self.updates_len.idxs_start() + self.idxs_len].write(idx);
+                // SAFETY: we initialized `idxs[idxs_len]` just now
+                #[allow(unused_unsafe)]
+                unsafe {
+                    self.idxs_len += 1;
+                }
+
+                assert!(self.ranges_len < self.updates_len.ranges_cap());
+                self.memory[self.updates_len.ranges_start() + self.ranges_len]
+                    .write(self.inserts_len.to_ne_bytes());
+
+                // SAFETY: we just initialized `ranges[ranges_len]` just now
+                #[allow(unused_unsafe)]
+                unsafe {
+                    self.ranges_len += 1;
+                }
+            } else {
+                self.memory[self.updates_len.ranges_start() + self.ranges_len - 1]
+                    .write((self.inserts_len).to_ne_bytes());
+            }
+        }
+
+        /// creates the contigously allocated form of the updates
+        #[inline]
+        pub(super) fn new(updates: &[super::Update]) -> Self {
+            let mut this = Self::new_uninit(updates.len());
+            for update in updates {
+                match *update {
+                    crate::Update::Remove(remove_idx) => this.push_remove(remove_idx),
+                    crate::Update::Insert(insert_idx, val) => {
+                        this.push_insert_index(insert_idx, val)
+                    }
+                }
+            }
+            this
+        }
+        #[inline]
+        pub(super) fn inserts_vec<'a>(&'a self, input: &'a [u8]) -> Vec<u8> {
+            let inserts = self.inserts();
+
+            let insert_idxs =
+                unsafe { self.assume_usize_slice(self.updates_len.idxs_start(), self.idxs_len) };
+
+            let insert_ranges = unsafe {
+                self.assume_usize_slice(self.updates_len.ranges_start(), self.ranges_len)
+            };
+            let mut output = Vec::with_capacity(input.len() - self.removes_len + self.inserts_len);
+            let mut curr_idx = 0;
+            for (insert_range, &insert_idx) in insert_ranges.windows(2).zip(insert_idxs) {
+                let prev_idx = curr_idx;
+                curr_idx = insert_idx;
+                output.extend_from_slice(&input[prev_idx..insert_idx]);
+                output.extend_from_slice(&inserts[insert_range[0]..insert_range[1]]);
+            }
+            output.extend_from_slice(&input[curr_idx..]);
+            output
+        }
+        #[inline]
+        pub(super) fn removes(&self) -> &[usize] {
+            // SAFETY: accessing removes
+            unsafe { self.assume_usize_slice(self.updates_len.removes_start(), self.removes_len) }
+        }
+    }
+}
+
+pub fn update_split_new_types_3(input: &[u8], updates: &[Update]) -> Vec<u8> {
+    let contig_updates = contig_updates::ContigUpdates::new(updates);
+
+    let inserted = contig_updates.inserts_vec(input);
+    let removes = contig_updates.removes();
+
     let mut prev_idx = 0;
-    for remove_idx in removes {
+    let mut output = Vec::with_capacity(inserted.len() - removes.len());
+    for &remove_idx in removes {
         output.extend_from_slice(&inserted[prev_idx..remove_idx]);
         prev_idx = remove_idx + 1;
     }
@@ -803,7 +986,7 @@ mod test {
     #[test]
     fn test_update_split_new_type_3() {
         for _ in 0..1_000 {
-            let (mut input, updates) = build_both(50, 100);
+            let (mut input, updates) = build_both(500, 1_000);
             println!("input: {input:?}\nupdates: {updates:?}");
             let input1 = input.clone();
             update_simple(&mut input, &updates);
