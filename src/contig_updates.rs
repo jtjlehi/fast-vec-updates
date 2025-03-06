@@ -104,26 +104,31 @@ impl ContigUpdates {
     /// are initialized, and that each array was initialized using `usize::to_ne_bytes`
     #[inline]
     unsafe fn assume_usize_slice(&self, start: usize, len: usize) -> &[usize] {
-        let slice = &self.memory[start..start + len];
+        // SAFETY: caller checks that start is within the bounds of the allocated
+        let ptr = unsafe { self.memory.as_ptr().add(start) };
         // SAFETY:
         // the caller makes sure that each element in each array is initialized as usize
-        let init_slice = unsafe { slice.assume_init_ref() };
-        bytemuck::cast_slice(init_slice)
+        // init_slice is:
+        // - non-null
+        // - caller checks slice is valid for `len`
+        // - the alignment of `init_slice` is 1, and there are `8 * len` values in it
+        unsafe { std::slice::from_raw_parts(ptr as *const usize, len) }
     }
 
     #[inline]
     fn inserts(&self) -> &[u8] {
         let inserts_start = self.updates_len.inserts_start();
-        let inserts_arr_len = self.inserts_len.div_ceil(8);
-        let slice = &self.memory[inserts_start..inserts_start + inserts_arr_len];
+        // SAFETY: `inserts_starts` is within allocation
+        let ptr = unsafe { self.memory.as_ptr().add(inserts_start) };
         // SAFETY:
-        // `slice` is entirely initialized
-        // - `inserts` start at removes_cap
-        // - whenever we "push" to inserts we initialize all of the members of the array
-        // - we only increment `self.inserts_len` after initializing the array it points into
-        let init_slice = unsafe { slice.assume_init_ref() };
-        // after casting to from [[u8]] to [u8], take only the bytes we are using
-        &bytemuck::cast_slice(init_slice)[..self.inserts_len]
+        // init_slice is:
+        // - non-null
+        // - valid for `inserts_len` bytes
+        // - `[u8; 8]` has the same alignment as `u8`
+        // - contained inside the single `memory` allocation
+        // - borrow checker makes sure we won't mutate
+        // - `inserts_len` < `isize::MAX`
+        unsafe { std::slice::from_raw_parts(ptr as *const u8, self.inserts_len) }
     }
     #[inline]
     fn push_remove(&mut self, idx: usize) {
