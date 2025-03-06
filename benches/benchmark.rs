@@ -2,10 +2,11 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fast_update::{
-    build_both, contig_updates::ContigUpdates, update_collect_iter, update_in_chunks,
-    update_new_types_3_pre_compute, update_realloc, update_simple, update_split_alloc,
-    update_split_new_types, update_split_new_types_1, update_split_new_types_1_1,
-    update_split_new_types_2, update_split_new_types_3,
+    build_both, contig_updates::ContigUpdates, init_new_types_1, update_collect_iter,
+    update_in_chunks, update_new_types_1_pre_compute, update_new_types_3_pre_compute,
+    update_realloc, update_simple, update_split_alloc, update_split_new_types,
+    update_split_new_types_1, update_split_new_types_1_1, update_split_new_types_2,
+    update_split_new_types_3,
 };
 
 pub fn bench_small(c: &mut Criterion) {
@@ -202,7 +203,30 @@ pub fn bench_large(c: &mut Criterion) {
 }
 
 pub fn bench_precomputed(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bench_precomputed");
+    let mut group = c.benchmark_group("precomputed");
+    group.bench_function("new_types_1", |b| {
+        b.iter_batched(
+            || {
+                let (input, updates) = build_both(50_000, 1_000_000);
+
+                let (removes, inserts) = init_new_types_1(&updates);
+                let inserts_vec = Vec::with_capacity(input.len() + inserts.len());
+
+                let output = Vec::with_capacity(input.len() + inserts.len() - removes.len());
+                (input, removes, inserts, inserts_vec, output)
+            },
+            |(input, removes, inserts, mut inserts_vec, mut output)| {
+                update_new_types_1_pre_compute(
+                    black_box(&input),
+                    black_box(&removes),
+                    black_box(&inserts),
+                    black_box(&mut inserts_vec),
+                    black_box(&mut output),
+                );
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
     group.bench_function("new_types_3", |b| {
         b.iter_batched(
             || {

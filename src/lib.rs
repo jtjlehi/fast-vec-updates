@@ -436,6 +436,48 @@ pub fn update_split_new_types_1_1(input: &[u8], updates: &[Update]) -> Vec<u8> {
     output.extend_from_slice(&inserted[prev_idx..]);
     output
 }
+pub fn init_new_types_1(updates: &[Update]) -> (Vec<usize>, Vec<(usize, u8)>) {
+    let mut removes = Vec::<usize>::with_capacity(updates.len());
+    let mut inserts = Vec::<(usize, u8)>::with_capacity(updates.len());
+
+    for update in updates {
+        match *update {
+            Update::Remove(idx) => {
+                let remove_idx = idx + inserts.len();
+                if Some(&remove_idx) != removes.last() {
+                    removes.push(idx + inserts.len())
+                }
+            }
+            Update::Insert(idx, val) => inserts.push((idx, val)),
+        }
+    }
+    (removes, inserts)
+}
+pub fn update_new_types_1_pre_compute(
+    input: &[u8],
+    removes: &[usize],
+    inserts: &[(usize, u8)],
+    inserted: &mut Vec<u8>,
+    output: &mut Vec<u8>,
+) {
+    assert!(inserted.capacity() >= input.len() + inserts.len());
+    assert!(output.capacity() >= input.len() - removes.len() + inserts.len());
+
+    let mut prev_idx = 0;
+    for &(insert_idx, val) in inserts {
+        inserted.extend_from_slice(&input[prev_idx..insert_idx]);
+        inserted.push(val);
+        prev_idx = insert_idx;
+    }
+    inserted.extend_from_slice(&input[prev_idx..]);
+
+    let mut prev_idx = 0;
+    for &remove_idx in removes {
+        output.extend_from_slice(&inserted[prev_idx..remove_idx]);
+        prev_idx = remove_idx + 1;
+    }
+    output.extend_from_slice(&inserted[prev_idx..]);
+}
 
 pub fn update_split_new_types_2(input: &[u8], updates: &[Update]) -> Vec<u8> {
     // indexes of removes
@@ -745,7 +787,33 @@ mod test {
     }
 
     #[test]
-    fn test_update_new_tyeps_3_pre_compute() {
+    fn test_update_new_types_1_pre_compute() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(500, 1_000);
+            let input1 = input.clone();
+            println!("input: {input:?}\nupdates: {updates:?}");
+
+            let (removes, inserts) = init_new_types_1(&updates);
+            let mut inserts_vec = Vec::with_capacity(input1.len() + inserts.len());
+
+            let mut output = Vec::with_capacity(input1.len() + inserts.len() - removes.len());
+
+            update_new_types_1_pre_compute(
+                &input1,
+                &removes,
+                &inserts,
+                &mut inserts_vec,
+                &mut output,
+            );
+
+            update_simple(&mut input, &updates);
+
+            assert_eq!(input, output);
+        }
+    }
+
+    #[test]
+    fn test_update_new_types_3_pre_compute() {
         for _ in 0..1_000 {
             let (mut input, updates) = build_both(500, 1_000);
             let input1 = input.clone();
