@@ -2,11 +2,11 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fast_update::{
-    build_both, contig_updates::ContigUpdates, init_new_types_1, update_collect_iter,
-    update_in_chunks, update_new_types_1_pre_compute, update_new_types_3_pre_compute,
-    update_realloc, update_simple, update_split_alloc, update_split_new_types,
-    update_split_new_types_1, update_split_new_types_1_1, update_split_new_types_2,
-    update_split_new_types_3,
+    build_both, contig_updates::ContigUpdates, init_new_types_1, split_1_2_alloc_size,
+    update_collect_iter, update_in_chunks, update_new_types_1_pre_compute,
+    update_new_types_3_pre_compute, update_realloc, update_simple, update_split_alloc,
+    update_split_new_types, update_split_new_types_1, update_split_new_types_1_1,
+    update_split_new_types_1_2, update_split_new_types_2, update_split_new_types_3,
 };
 
 pub fn bench_small(c: &mut Criterion) {
@@ -273,6 +273,24 @@ pub fn bench_large_new_types(c: &mut Criterion) {
                     black_box(&input),
                     black_box(&updates),
                 ))
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_split_new_types_1_2", |b| {
+        b.iter_batched(
+            || {
+                (
+                    build_both(50_000, 1_000_000),
+                    Box::new_uninit_slice(split_1_2_alloc_size(1_000_000, 50_000)),
+                )
+            },
+            |((input, updates), mut buffer)| {
+                black_box(update_split_new_types_1_2(
+                    black_box(&input),
+                    black_box(&updates),
+                    black_box(&mut buffer),
+                ));
             },
             criterion::BatchSize::SmallInput,
         );

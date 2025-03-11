@@ -6,6 +6,8 @@
 /// module to encapsulate `ContigUpdates`
 pub mod contig_updates;
 
+use core::mem::MaybeUninit;
+
 use contig_updates::ContigUpdates;
 
 pub fn build_input(length: usize) -> Vec<u8> {
@@ -479,6 +481,126 @@ pub fn update_new_types_1_pre_compute(
     output.extend_from_slice(&inserted[prev_idx..]);
 }
 
+struct PartialInitSlice<'a, T> {
+    raw_data: &'a mut [MaybeUninit<T>],
+    len: usize,
+}
+
+impl<'a, T> PartialInitSlice<'_, T> {
+    fn create_by_split(
+        buffer: &'a mut [MaybeUninit<u8>],
+        cap: usize,
+    ) -> (Self, &'a mut [MaybeUninit<u8>]) {
+        const {
+            assert!(align_of::<T>() <= std::mem::size_of::<T>());
+        }
+        let (this_buffer, buffer) = buffer.split_at_mut(cap * std::mem::size_of::<T>());
+        (
+            Self {
+                // SAFETY:
+                // we are casting `this_buffer` to `MaybeUninit<T>`
+                // the size of `this_buffer` is `cap` times `size_of::<T>`
+                // so the cast is safe
+                raw_data: unsafe {
+                    core::slice::from_raw_parts_mut(
+                        this_buffer.as_mut_ptr() as *mut MaybeUninit<T>,
+                        cap,
+                    )
+                },
+                len: 0,
+            },
+            buffer,
+        )
+    }
+    #[inline]
+    fn push(&mut self, el: T) {
+        self.raw_data[self.len].write(el);
+        self.len += 1;
+    }
+    #[inline]
+    fn get_slice(self) -> &'a [T] {
+        assert!(self.len <= self.raw_data.len());
+        // SAFETY: we only increment `self.len` after initializing the value at it's index
+        // this function takes ownership of Self, so no one else can mutate `self.mem`
+        unsafe { std::slice::from_raw_parts(self.raw_data.as_ptr() as *const T, self.len) }
+    }
+    #[inline]
+    fn len(&self) -> usize {
+        self.len
+    }
+    #[inline]
+    fn last(&self) -> Option<&T> {
+        if self.len > 0 {
+            // SAFETY: everything less then `self.len` is initialized
+            Some(unsafe { self.raw_data[self.len - 1].assume_init_ref() })
+        } else {
+            None
+        }
+    }
+    #[inline]
+    fn copy_from_slice(&mut self, slice: &[T])
+    where
+        T: Copy,
+    {
+        // treat the slice as an uninit slice
+        // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+        let uninit_slice: &[MaybeUninit<T>] = unsafe { core::mem::transmute(slice) };
+
+        self.raw_data[self.len..self.len + slice.len()].copy_from_slice(uninit_slice);
+
+        self.len += slice.len();
+    }
+}
+
+pub const fn split_1_2_alloc_size(input_len: usize, updates_len: usize) -> usize {
+    let input_len = input_len * size_of::<usize>();
+    let removes_len = updates_len * size_of::<usize>();
+    let inserts_len = size_of::<(usize, u8)>();
+    let inserted_len = input_len + inserts_len;
+    removes_len + inserts_len + (inserted_len * 2) + input_len
+}
+pub fn update_split_new_types_1_2<'a, 'b>(
+    input: &'a [u8],
+    updates: &'a [Update],
+    buffer: &'b mut [MaybeUninit<u8>],
+) -> &'b [u8] {
+    let (mut removes, buffer) = PartialInitSlice::<'b, _>::create_by_split(buffer, updates.len());
+    let (mut inserts, buffer) = PartialInitSlice::<'b, _>::create_by_split(buffer, updates.len());
+    for update in updates {
+        match *update {
+            Update::Remove(idx) => {
+                let remove_idx = idx + inserts.len();
+                if Some(&remove_idx) != removes.last() {
+                    removes.push(idx + inserts.len())
+                }
+            }
+            Update::Insert(idx, val) => inserts.push((idx, val)),
+        }
+    }
+
+    let (mut inserted, buffer) =
+        PartialInitSlice::<'b, _>::create_by_split(buffer, input.len() + inserts.len());
+    let inserts = inserts.get_slice();
+    let mut prev_idx = 0;
+    for &(insert_idx, val) in inserts {
+        inserted.copy_from_slice(&input[prev_idx..insert_idx]);
+        inserted.push(val);
+        prev_idx = insert_idx;
+    }
+    inserted.copy_from_slice(&input[prev_idx..]);
+    let inserted = inserted.get_slice();
+
+    let (mut output, _) =
+        PartialInitSlice::<'b, _>::create_by_split(buffer, inserted.len() - removes.len());
+    let mut prev_idx = 0;
+    for &remove_idx in removes.get_slice() {
+        output.copy_from_slice(&inserted[prev_idx..remove_idx]);
+        prev_idx = remove_idx + 1;
+    }
+    output.copy_from_slice(&inserted[prev_idx..]);
+    output.get_slice()
+}
+
 pub fn update_split_new_types_2(input: &[u8], updates: &[Update]) -> Vec<u8> {
     // indexes of removes
     let mut removes = Vec::<usize>::with_capacity(updates.len());
@@ -763,6 +885,21 @@ mod test {
             let input1 = input.clone();
             update_simple(&mut input, &updates);
             assert_eq!(input, update_split_new_types_1_1(&input1, &updates));
+        }
+    }
+    #[test]
+    fn test_update_split_new_type_1_2() {
+        for _ in 0..1_000 {
+            let (mut input, updates) = build_both(50, 100);
+            println!("input: {input:?}\nupdates: {updates:?}");
+            let input1 = input.clone();
+            let mut buffer =
+                Box::new_uninit_slice(split_1_2_alloc_size(input.len(), updates.len()));
+            update_simple(&mut input, &updates);
+            assert_eq!(
+                input,
+                update_split_new_types_1_2(&input1, &updates, &mut buffer)
+            );
         }
     }
     #[test]
