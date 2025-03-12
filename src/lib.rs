@@ -512,6 +512,13 @@ impl<'a, T> PartialInitSlice<'_, T> {
             buffer,
         )
     }
+    /// # Safety
+    /// only call this if `self.len < self.cap`
+    #[inline]
+    unsafe fn push_unchecked(&mut self, el: T) {
+        unsafe { self.raw_data.get_unchecked_mut(self.len()).write(el) };
+        self.len += 1;
+    }
     #[inline]
     fn push(&mut self, el: T) {
         self.raw_data[self.len].write(el);
@@ -537,6 +544,27 @@ impl<'a, T> PartialInitSlice<'_, T> {
             None
         }
     }
+    /// # Safety
+    /// caller must ensure that `self.len() + slice.len() <= capacity`
+    #[inline]
+    unsafe fn append_slice_unchecked(&mut self, slice: &[T])
+    where
+        T: Copy,
+    {
+        // treat the slice as an uninit slice
+
+        // SAFETY: caller ensures that `self.len()` is the less then the capacity
+        let dst = unsafe { self.raw_data.as_mut_ptr().add(self.len) };
+        // SAFETY: `T` and `MaybeUninit<T>` have the same layout
+        let src = slice.as_ptr() as *const MaybeUninit<T>;
+        // SAFETY:
+        // dst doesn't overlap src because dst comes from a mut slice that must be unique (and thus be non overlapping)
+        // dst is valid for `slice.len`
+        // caller ensures that src is valid for `slice.len()`
+        unsafe { core::ptr::copy_nonoverlapping(src, dst, slice.len()) };
+
+        self.len += slice.len();
+    }
     #[inline]
     fn copy_from_slice(&mut self, slice: &[T])
     where
@@ -559,7 +587,9 @@ pub const fn split_1_2_alloc_size(input_len: usize, updates_len: usize) -> usize
     let inserted_len = input_len + inserts_len;
     removes_len + inserts_len + (inserted_len * 2) + input_len
 }
-pub fn update_split_new_types_1_2<'a, 'b>(
+/// # Safety
+/// updates must be sorted and their indexes valid
+pub unsafe fn update_split_new_types_1_2<'a, 'b>(
     input: &'a [u8],
     updates: &'a [Update],
     buffer: &'b mut [MaybeUninit<u8>],
@@ -571,10 +601,12 @@ pub fn update_split_new_types_1_2<'a, 'b>(
             Update::Remove(idx) => {
                 let remove_idx = idx + inserts.len();
                 if Some(&remove_idx) != removes.last() {
-                    removes.push(idx + inserts.len())
+                    // SAFETY: `removes` cap is `updates.len`, so we push at most `updates.len`
+                    unsafe { removes.push_unchecked(idx + inserts.len()) }
                 }
             }
-            Update::Insert(idx, val) => inserts.push((idx, val)),
+            // SAFETY: `inserts` cap is `updates.len`, so we push at most `updates.len`
+            Update::Insert(idx, val) => unsafe { inserts.push_unchecked((idx, val)) },
         }
     }
 
@@ -583,21 +615,39 @@ pub fn update_split_new_types_1_2<'a, 'b>(
     let inserts = inserts.get_slice();
     let mut prev_idx = 0;
     for &(insert_idx, val) in inserts {
-        inserted.copy_from_slice(&input[prev_idx..insert_idx]);
-        inserted.push(val);
+        // SAFETY: if caller meets safety requirements insert_idx is less then `inserts.len()`
+        let copy_slice = unsafe { input.get_unchecked(prev_idx..insert_idx) };
+        // SAFETY:
+        // `inserted` cap is `inserts.len() + input.len()`
+        // we insert all of `inserts` and all of `input`, nothing more
+        unsafe {
+            inserted.append_slice_unchecked(copy_slice);
+            inserted.push_unchecked(val);
+        }
         prev_idx = insert_idx;
     }
-    inserted.copy_from_slice(&input[prev_idx..]);
+    // SAFETY: if caller meets safety requirements insert_idx is less then `inserts.len()`
+    let copy_slice = unsafe { input.get_unchecked(prev_idx..) };
+    // SAFETY: finishing the last copy still within bounds
+    unsafe { inserted.append_slice_unchecked(copy_slice) };
     let inserted = inserted.get_slice();
 
     let (mut output, _) =
         PartialInitSlice::<'b, _>::create_by_split(buffer, inserted.len() - removes.len());
     let mut prev_idx = 0;
     for &remove_idx in removes.get_slice() {
-        output.copy_from_slice(&inserted[prev_idx..remove_idx]);
+        // SAFETY: caller checks that remove_idx is within `input`
+        let copy_slice = unsafe { inserted.get_unchecked(prev_idx..remove_idx) };
+        // SAFETY: we only insert `inserted.len() - removes.len()`
+        unsafe {
+            output.append_slice_unchecked(copy_slice);
+        }
         prev_idx = remove_idx + 1;
     }
-    output.copy_from_slice(&inserted[prev_idx..]);
+    // SAFETY: caller checks that remove_idx is within `input`
+    let copy_slice = unsafe { inserted.get_unchecked(prev_idx..) };
+    // SAFETY: we only insert `inserted.len() - removes.len()`
+    unsafe { output.append_slice_unchecked(copy_slice) };
     output.get_slice()
 }
 
@@ -896,10 +946,9 @@ mod test {
             let mut buffer =
                 Box::new_uninit_slice(split_1_2_alloc_size(input.len(), updates.len()));
             update_simple(&mut input, &updates);
-            assert_eq!(
-                input,
+            assert_eq!(input, unsafe {
                 update_split_new_types_1_2(&input1, &updates, &mut buffer)
-            );
+            });
         }
     }
     #[test]

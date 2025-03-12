@@ -79,6 +79,26 @@ pub fn bench_small(c: &mut Criterion) {
             criterion::BatchSize::SmallInput,
         );
     });
+    group.bench_function("update_split_new_types_1_2", |b| {
+        b.iter_batched(
+            || {
+                (
+                    build_both(5_000, 100_000),
+                    Box::new_uninit_slice(split_1_2_alloc_size(100_000, 5_000)),
+                )
+            },
+            |((input, updates), mut buffer)| {
+                unsafe {
+                    black_box(update_split_new_types_1_2(
+                        black_box(&input),
+                        black_box(&updates),
+                        black_box(&mut buffer),
+                    ))
+                };
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
     group.bench_function("update_split_new_types_2", |b| {
         b.iter_batched(
             || build_both(5_000, 100_000),
@@ -171,6 +191,26 @@ pub fn bench_large(c: &mut Criterion) {
                     black_box(&input),
                     black_box(&updates),
                 ))
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_split_new_types_1_2", |b| {
+        b.iter_batched(
+            || {
+                (
+                    build_both(50_000, 1_000_000),
+                    Box::new_uninit_slice(split_1_2_alloc_size(1_000_000, 50_000)),
+                )
+            },
+            |((input, updates), mut buffer)| {
+                unsafe {
+                    black_box(update_split_new_types_1_2(
+                        black_box(&input),
+                        black_box(&updates),
+                        black_box(&mut buffer),
+                    ))
+                };
             },
             criterion::BatchSize::SmallInput,
         );
@@ -286,11 +326,13 @@ pub fn bench_large_new_types(c: &mut Criterion) {
                 )
             },
             |((input, updates), mut buffer)| {
-                black_box(update_split_new_types_1_2(
-                    black_box(&input),
-                    black_box(&updates),
-                    black_box(&mut buffer),
-                ));
+                unsafe {
+                    black_box(update_split_new_types_1_2(
+                        black_box(&input),
+                        black_box(&updates),
+                        black_box(&mut buffer),
+                    ))
+                };
             },
             criterion::BatchSize::SmallInput,
         );
@@ -381,6 +423,26 @@ pub fn bench_extra_large(c: &mut Criterion) {
                     black_box(&input),
                     black_box(&updates),
                 ))
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("update_split_new_types_1_2", |b| {
+        b.iter_batched(
+            || {
+                (
+                    build_both(5_000_000, 50_000_000),
+                    Box::new_uninit_slice(split_1_2_alloc_size(50_000_000, 5_000_000)),
+                )
+            },
+            |((input, updates), mut buffer)| {
+                unsafe {
+                    black_box(update_split_new_types_1_2(
+                        black_box(&input),
+                        black_box(&updates),
+                        black_box(&mut buffer),
+                    ))
+                };
             },
             criterion::BatchSize::SmallInput,
         );
