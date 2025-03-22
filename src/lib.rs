@@ -486,7 +486,7 @@ struct PartialInitSlice<'a, T> {
     len: usize,
 }
 
-impl<'a, T> PartialInitSlice<'_, T> {
+impl<'a, T> PartialInitSlice<'a, T> {
     fn create_by_split(
         buffer: &'a mut [MaybeUninit<u8>],
         cap: usize,
